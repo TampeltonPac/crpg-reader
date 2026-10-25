@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CRPG Reader">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#14202b">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.png">
+<title>CRPG Reader</title>
+<style>
+:root{--bg:#14202b;--surf:#1d2d3b;--line:#2c4052;--txt:#e6e2d6;--dim:#93a3b1;--acc:#e0b04a;--accfg:#14202b;
+--ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;--read:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+@media(prefers-color-scheme:light){:root{--bg:#eef1f4;--surf:#fff;--line:#d3dbe2;--txt:#1b2733;--dim:#5d6e7d;--acc:#8a5a00;--accfg:#fff}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.4 var(--ui);
+padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+a{color:var(--acc)}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);
+padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;margin-top:calc(-1*env(safe-area-inset-top));display:flex;gap:12px;align-items:center}
+header h1{font-size:17px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header button{background:none;border:0;color:var(--acc);font:inherit;padding:6px 0;cursor:pointer}
+main{max-width:720px;margin:0 auto;padding:16px}
+.cont{display:block;text-decoration:none;color:var(--accfg);background:var(--acc);border-radius:10px;padding:14px 16px;margin-bottom:16px}
+.cont small{display:block;opacity:.8}.cont b{display:block;font-size:19px}.cont span{opacity:.9}
+input[type=search]{width:100%;font:inherit;color:var(--txt);background:var(--surf);border:1px solid var(--line);border-radius:10px;padding:11px 14px;margin-bottom:8px}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:13px 2px;border-bottom:1px solid var(--line);color:var(--txt);text-decoration:none}
+.row i{font-style:normal;color:var(--dim);font-size:14px;white-space:nowrap}
+.row.cur{border-left:3px solid var(--acc);padding-left:10px}
+.row.done{color:var(--dim)}
+.msg{color:var(--dim);padding:24px 0;text-align:center}
+article{font:19px/1.6 var(--read);overflow-wrap:break-word}
+article h2{font:600 24px/1.25 var(--read);margin:.2em 0 .6em}
+article img{max-width:100%!important;height:auto!important;border-radius:4px}
+article .separator,article .tr-caption-container{margin:12px 0!important;text-align:center}
+article table{max-width:100%}
+article iframe{max-width:100%}
+.nav{display:flex;gap:10px;margin:28px 0 12px}
+.nav a,.nav span{flex:1;text-align:center;padding:13px;border-radius:10px;font:inherit;font-family:var(--ui);text-decoration:none}
+.nav a{background:var(--acc);color:var(--accfg)}
+.nav span{border:1px solid var(--line);color:var(--dim)}
+.meta{color:var(--dim);font:14px var(--ui);margin-bottom:18px}
+</style>
+</head>
+<body>
+<header><button id="back" hidden>‹ Zurück</button><h1 id="ttl">CRPG Reader</h1><button id="reload" title="Neu laden">Neu laden</button></header>
+<main id="app"></main>
+<script>
+const BASE='https://www.crpgaddict.com/feeds/posts/default';
+const PROXIES=[u=>u,u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://corsproxy.io/?'+encodeURIComponent(u)];
+const $=s=>document.querySelector(s),app=$('#app');
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const enc=encodeURIComponent;
+const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+let progress=store.get('progress',{}); // Spiel -> {idx,title,scroll,ts,total,read:{id:1}}
+const posts={};
+
+async function getJSON(url){
+  let err;
+  for(const p of PROXIES){try{const r=await fetch(p(url));if(r.ok)return await r.json()}catch(e){err=e}}
+  throw err||new Error('Laden fehlgeschlagen');
+}
+async function loadLabels(force){
+  let l=store.get('labels',null);
+  if(l&&!force)return l;
+  try{
+    const d=await getJSON(BASE+'?alt=json&max-results=0');
+    l=(d.feed.category||[]).map(c=>c.term).sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));
+    store.set('labels',l);
+  }catch(e){if(!l)throw e}
+  return l;
+}
+async function loadPosts(label,force){
+  if(posts[label]&&!force)return posts[label];
+  const d=await getJSON(`${BASE}/-/${enc(label)}?alt=json&max-results=150&orderby=published`);
+  const list=(d.feed.entry||[]).map(e=>({
+    id:e.id.$t,title:e.title.$t,date:(e.published.$t||'').slice(0,10),
+    url:(e.link.find(l=>l.rel==='alternate')||{}).href,html:(e.content||e.summary||{$t:''}).$t
+  })).reverse();
+  return posts[label]=list;
+}
+function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back}
+function save(){store.set('progress',progress)}
+
+async function home(){
+  setHead('CRPG Reader',false);
+  const last=Object.entries(progress).sort((a,b)=>b[1].ts-a[1].ts)[0];
+  app.innerHTML=(last?`<a class="cont" href="#/p/${enc(last[0])}/${last[1].idx}"><small>Weiterlesen</small><b>${esc(last[0])}</b><span>${esc(last[1].title)}</span></a>`:'')
+    +'<input id="q" type="search" placeholder="Spiel suchen" autocomplete="off"><div id="list"><div class="msg">Lade Spieleliste …</div></div>';
+  let labels;
+  try{labels=await loadLabels()}catch(e){$('#list').innerHTML='<div class="msg">Die Spieleliste konnte nicht geladen werden. Prüfe die Verbindung und tippe auf „Neu laden“.</div>';return}
+  const draw=()=>{
+    const q=$('#q').value.trim().toLowerCase();
+    const f=labels.filter(l=>l.toLowerCase().includes(q));
+    $('#list').innerHTML=f.length?f.map(l=>{
+      const p=progress[l];
+      return `<a class="row" href="#/g/${enc(l)}"><span>${esc(l)}</span>${p?`<i>Beitrag ${p.idx+1}${p.total?'/'+p.total:''}</i>`:''}</a>`;
+    }).join(''):'<div class="msg">Kein Spiel gefunden.</div>';
+  };
+  $('#q').oninput=draw;draw();
+}
+
+async function game(label){
+  setHead(label,true);
+  app.innerHTML='<div class="msg">Lade Beiträge …</div>';
+  let list;
+  try{list=await loadPosts(label)}catch(e){app.innerHTML='<div class="msg">Beiträge konnten nicht geladen werden.</div>';return}
+  const p=progress[label]||{};
+  const html=list.map((x,i)=>{
+    const cls=i===p.idx?'row cur':(p.read&&p.read[x.id]?'row done':'row');
+    return `<a class="${cls}" href="#/p/${enc(label)}/${i}"><span>${esc(x.title)}</span><i>${x.date}</i></a>`;
+  }).join('');
+  app.innerHTML=(list.length?html:'<div class="msg">Keine Beiträge gefunden.</div>');
+  const cur=app.querySelector('.cur');if(cur)cur.scrollIntoView({block:'center'});
+}
+
+async function post(label,idx){
+  setHead(label,true);
+  app.innerHTML='<div class="msg">Lade Beitrag …</div>';
+  let list;
+  try{list=await loadPosts(label)}catch(e){app.innerHTML='<div class="msg">Beitrag konnte nicht geladen werden.</div>';return}
+  const x=list[idx];
+  if(!x){location.hash='#/g/'+enc(label);return}
+  const old=progress[label]||{read:{}};
+  const resume=old.idx===idx?old.scroll||0:0;
+  if(old.idx!==undefined&&old.idx!==idx&&old.id)old.read[old.id]=1;
+  progress[label]={idx,id:x.id,title:x.title,scroll:resume,ts:Date.now(),total:list.length,read:old.read||{}};
+  save();
+  const prev=idx>0?`<a href="#/p/${enc(label)}/${idx-1}">‹ Vorheriger</a>`:'<span>‹ Vorheriger</span>';
+  const next=idx<list.length-1?`<a href="#/p/${enc(label)}/${idx+1}">Nächster ›</a>`:'<span>Nächster ›</span>';
+  app.innerHTML=`<article><h2>${esc(x.title)}</h2><div class="meta">${x.date} · Beitrag ${idx+1} von ${list.length}${x.url?` · <a href="${esc(x.url)}" target="_blank" rel="noopener">Original</a>`:''}</div>${x.html}</article><div class="nav">${prev}${next}</div>`;
+  app.querySelectorAll('article a').forEach(a=>{a.target='_blank';a.rel='noopener'});
+  window.scrollTo(0,resume);
+}
+
+let sv;
+addEventListener('scroll',()=>{
+  const m=location.hash.split('/');if(m[1]!=='p')return;
+  clearTimeout(sv);
+  sv=setTimeout(()=>{
+    const label=decodeURIComponent(m[2]||''),p=progress[label];
+    if(!p||p.idx!==+m[3])return;
+    p.scroll=Math.round(scrollY);p.ts=Date.now();
+    if(scrollY+innerHeight>=document.documentElement.scrollHeight-200)p.read[p.id]=1;
+    save();
+  },300);
+},{passive:true});
+
+function route(){
+  const [,t,a,b]=location.hash.slice(1).split('/').map(s=>s&&decodeURIComponent(s));
+  if(t==='g'&&a)game(a);else if(t==='p'&&a)post(a,+b||0);else{home();window.scrollTo(0,0)}
+  if(t!=='p')window.scrollTo(0,0);
+}
+addEventListener('hashchange',route);
+$('#back').onclick=()=>{const t=location.hash.split('/')[1];location.hash=t==='p'?'#/g/'+location.hash.split('/')[2]:'#/'};
+$('#reload').onclick=async()=>{
+  const m=location.hash.split('/');
+  if(m[1]==='g'||m[1]==='p'){const l=decodeURIComponent(m[2]);delete posts[l];await loadPosts(l,true).catch(()=>{})}
+  else await loadLabels(true).catch(()=>{});
+  route();
+};
+route();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
