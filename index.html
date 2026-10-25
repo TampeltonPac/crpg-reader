@@ -118,7 +118,7 @@ async function loadPosts(label,force){
   store.set('p:'+label,list);
   return posts[label]=list;
 }
-function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back}
+function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back;$('#reload').hidden=!!back}
 function save(){store.set('progress',progress);store.set('done',done)}
 
 async function home(){
@@ -174,10 +174,10 @@ async function post(label,idx){
   progress[label]={idx,id:x.id,title:x.title,scroll:resume,ts:Date.now(),total:list.length,read:old.read||{}};
   save();
   const prev=idx>0?`<a href="#/p/${enc(label)}/${idx-1}">‹ Vorheriger</a>`:'<span>‹ Vorheriger</span>';
-  const next=idx<list.length-1?`<a href="#/p/${enc(label)}/${idx+1}">Nächster ›</a>`:'<a href="#" id="fin">Fertig gelesen ✓</a>';
+  const next=idx<list.length-1?`<a href="#/p/${enc(label)}/${idx+1}">Nächster ›</a>`:`<a href="#" id="fin">${done[label]?'✓ Fertig gelesen (rückgängig)':'Fertig gelesen ✓'}</a>`;
   app.innerHTML=`<article><h2>${esc(x.title)}</h2><div class="meta">${x.date} · Beitrag ${idx+1} von ${list.length}${x.url?` · <a href="${esc(x.url)}" target="_blank" rel="noopener">Original</a>`:''}</div>${x.html}</article><div class="nav">${prev}${next}</div>`;
   app.querySelectorAll('article a').forEach(a=>{a.target='_blank';a.rel='noopener'});
-  const fb=$('#fin');if(fb)fb.onclick=e=>{e.preventDefault();finish(label)};
+  const fb=$('#fin');if(fb)fb.onclick=e=>{e.preventDefault();finish(label,idx)};
   window.scrollTo(0,resume);
 }
 
@@ -194,7 +194,8 @@ addEventListener('scroll',()=>{
   },300);
 },{passive:true});
 
-function finish(label){
+function finish(label,idx){
+  if(done[label]){delete done[label];save();post(label,idx);return}
   if(!confirm('Als fertig gelesen markieren? Dein Lesefortschritt für dieses Spiel wird gelöscht.'))return;
   done[label]=Date.now();delete progress[label];save();location.hash='#/';
 }
