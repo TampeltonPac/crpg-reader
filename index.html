@@ -68,22 +68,22 @@ let progress=store.get('progress',{});
 let done=store.get('done',{}); // Spiel -> Zeitstempel (fertig gelesen) // Spiel -> {idx,title,scroll,ts,total,read:{id:1}}
 const posts={};
 
-function jsonp(url){
+function jsonp(url,ms=12000){
   return new Promise((res,rej)=>{
     const cb='cb'+Math.random().toString(36).slice(2),el=document.createElement('script');
     const done=()=>{clearTimeout(t);delete window[cb];el.remove()};
-    const t=setTimeout(()=>{done();rej(new Error('keine gültige Antwort'))},12000);
+    const t=setTimeout(()=>{done();rej(new Error('keine gültige Antwort'))},ms);
     window[cb]=d=>{done();res(d)};
     el.onerror=()=>{done();rej(new Error('Skript blockiert oder nicht erreichbar'))};
     el.src=url.replace('alt=json','alt=json-in-script')+'&callback='+cb;
     document.head.appendChild(el);
   });
 }
-async function getJSON(url){
+async function getJSON(url,ms){
   const errs=[];
   for(const h of HOSTS){
     const u=url.replace(HOSTS[0],h);
-    try{return await jsonp(u)}catch(e){errs.push(h.replace('https://','')+': '+e.message)}
+    try{return await jsonp(u,ms)}catch(e){errs.push(h.replace('https://','')+': '+e.message)}
   }
   for(const p of PROXIES.slice(1)){
     try{const r=await fetch(p(url));if(r.ok){const t=await r.text();return JSON.parse(t)}errs.push('Proxy HTTP '+r.status)}catch(e){errs.push('Proxy: '+e.message)}
@@ -113,12 +113,17 @@ async function loadLabels(force){
 }
 async function crawlLabels(say){
   const S=BASE.replace('/default','/summary'),set=new Set(store.get('labels',[]));
-  for(let i=1;i<=10000;i+=500){
-    say(`Lade Beiträge ab Nr. ${i} …`);
-    const r=await getJSON(`${S}?alt=json&max-results=500&start-index=${i}`);
+  let i=1,total=0;
+  while(i<=30000){
+    say(total?`Lade Beiträge: ${i-1} von ${total} …`:'Lade Beiträge …');
+    const r=await getJSON(`${S}?alt=json&max-results=500&start-index=${i}`,60000);
     const e=r.feed.entry||[];
+    total=+((r.feed['openSearch$totalResults']||{}).$t)||total;
+    if(!e.length)break;
     e.forEach(x=>(x.category||[]).forEach(c=>set.add(c.term)));
-    if(e.length<500)break;
+    store.set('labels',[...set].sort((a,b)=>a.localeCompare(b,'en',{numeric:true})));
+    i+=e.length;
+    if(total&&i>total)break;
   }
   const l=[...set].sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));
   store.set('labels',l);return l;
