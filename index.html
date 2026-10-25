@@ -58,23 +58,27 @@ article iframe{max-width:100%}
 <main id="app"></main>
 <script>
 const HOSTS=['https://crpgaddict.blogspot.com','https://www.crpgaddict.com'];
-const BASE=HOSTS[0]+'/feeds/posts/default';
-const PROXIES=[u=>u,u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://corsproxy.io/?'+encodeURIComponent(u)];
+const FEED=HOSTS[0]+'/feeds';
 const $=s=>document.querySelector(s),app=$('#app');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const enc=encodeURIComponent;
 const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
-let progress=store.get('progress',{});
-let done=store.get('done',{}); // Spiel -> Zeitstempel (fertig gelesen) // Spiel -> {idx,title,scroll,ts,total,read:{id:1}}
-const posts={};
+try{Object.keys(localStorage).forEach(k=>{if(k==='labels'||k.startsWith('p:'))localStorage.removeItem(k)})}catch{}
+let progress=store.get('progress2',{}); // Spiel -> {idx,id,title,scroll,ts,total,read:{}}
+let done=store.get('done2',{});         // Spiel -> Zeitstempel (fertig gelesen)
+let games=store.get('games',null);      // [{n:Name, l:[[Pfad,Linktext],...]}]
+let pmap=store.get('pmap',null);        // Pfad -> [PostId,Titel,Datum]
+const cache={};
+function save(){store.set('progress2',progress);store.set('done2',done)}
+const keyOf=u=>u.replace(/^https?:\/\/[^\/]+/,'').split('#')[0].split('?')[0];
 
-function jsonp(url,ms=12000){
+function jsonp(url,ms=15000){
   return new Promise((res,rej)=>{
     const cb='cb'+Math.random().toString(36).slice(2),el=document.createElement('script');
-    const done=()=>{clearTimeout(t);delete window[cb];el.remove()};
-    const t=setTimeout(()=>{done();rej(new Error('keine gültige Antwort'))},ms);
-    window[cb]=d=>{done();res(d)};
-    el.onerror=()=>{done();rej(new Error('Skript blockiert oder nicht erreichbar'))};
+    const fin=()=>{clearTimeout(t);delete window[cb];el.remove()};
+    const t=setTimeout(()=>{fin();rej(new Error('keine gültige Antwort'))},ms);
+    window[cb]=d=>{fin();res(d)};
+    el.onerror=()=>{fin();rej(new Error('Skript blockiert oder nicht erreichbar'))};
     el.src=url.replace('alt=json','alt=json-in-script')+'&callback='+cb;
     document.head.appendChild(el);
   });
@@ -82,147 +86,154 @@ function jsonp(url,ms=12000){
 async function getJSON(url,ms){
   const errs=[];
   for(const h of HOSTS){
-    const u=url.replace(HOSTS[0],h);
-    try{return await jsonp(u,ms)}catch(e){errs.push(h.replace('https://','')+': '+e.message)}
-  }
-  for(const p of PROXIES.slice(1)){
-    try{const r=await fetch(p(url));if(r.ok){const t=await r.text();return JSON.parse(t)}errs.push('Proxy HTTP '+r.status)}catch(e){errs.push('Proxy: '+e.message)}
+    try{return await jsonp(url.replace(HOSTS[0],h),ms)}catch(e){errs.push(h.replace('https://','')+': '+e.message)}
   }
   throw new Error(errs.join(' | '));
 }
-async function loadLabels(force){
-  let l=store.get('labels',null);
-  if(l&&l.length&&!force)return l;
-  try{
-    const set=new Set(l||[]);
-    const d=await getJSON(BASE+'?alt=json&max-results=0');
-    (d.feed.category||[]).forEach(c=>set.add(c.term));
-    if(!set.size){
-      const S=BASE.replace('/default','/summary');
-      for(let i=1;i<=5000;i+=500){
-        const r=await getJSON(`${S}?alt=json&max-results=500&start-index=${i}`);
-        const e=r.feed.entry||[];
-        e.forEach(x=>(x.category||[]).forEach(c=>set.add(c.term)));
-        if(e.length<500)break;
+
+function htmlToLines(html){
+  const d=new DOMParser().parseFromString(html,'text/html');
+  let out='';
+  const BLOCK=/^(P|DIV|H1|H2|H3|H4|LI|TR|UL|OL|TABLE)$/;
+  (function w(n){
+    for(const c of n.childNodes){
+      if(c.nodeType===3)out+=c.nodeValue;
+      else if(c.nodeType===1){
+        const t=c.tagName;
+        if(t==='A')out+='\u0001'+(c.getAttribute('href')||'')+'\u0002'+c.textContent+'\u0003';
+        else if(t==='BR')out+='\n';
+        else{const b=BLOCK.test(t);if(b)out+='\n';w(c);if(b)out+='\n'}
       }
     }
-    l=[...set].sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));
-    if(l.length)store.set('labels',l);
-  }catch(e){if(!l||!l.length)throw e}
-  return l;
+  })(d.body);
+  return out.split('\n');
 }
-async function crawlLabels(say){
-  const S=BASE.replace('/default','/summary'),set=new Set(store.get('labels',[]));
+function parseLines(lines){
+  const out=[],seen=new Set();
+  for(const line of lines){
+    const i=line.indexOf('\u0001');if(i<1)continue;
+    const name=line.slice(0,i).replace(/\s+/g,' ').replace(/:\s*P$/,'').replace(/[:\s]+$/,'').trim();
+    if(name.length<2)continue;
+    const links=[],ks=new Set();
+    for(const m of line.matchAll(/\u0001(.*?)\u0002(.*?)\u0003/g)){
+      const href=m[1],txt=m[2].trim();
+      if(!/crpgaddict\.(blogspot\.[a-z.]+|com)\/\d{4}\/\d\d\//.test(href))continue;
+      if(/^https?:/i.test(txt)||txt==='M')continue;
+      const k=keyOf(href);if(ks.has(k))continue;
+      ks.add(k);links.push([k,txt]);
+    }
+    if(!links.length)continue;
+    let n=name,c=2;while(seen.has(n))n=name+' #'+(c++);
+    seen.add(n);out.push({n,l:links});
+  }
+  return out;
+}
+
+async function setup(say,full){
+  say('Lade Spielverzeichnis …');
+  const pg=await getJSON(FEED+'/pages/default?alt=json&max-results=50');
+  const ents=pg.feed.entry||[];
+  const e=ents.find(x=>/Index of Games Played by Title/i.test(x.title.$t))
+    ||ents.find(x=>(x.link||[]).some(l=>/blog-page_3/.test(l.href||'')));
+  if(!e)throw new Error('Spielverzeichnis nicht gefunden');
+  const g=parseLines(htmlToLines(e.content.$t));
+  if(!g.length)throw new Error('Spielverzeichnis konnte nicht gelesen werden');
+  games=g;store.set('games',games);
+  pmap=full?{}:(pmap||{});
+  const S=FEED+'/posts/summary';
   let i=1,total=0;
   while(i<=30000){
-    say(total?`Lade Beiträge: ${i-1} von ${total} …`:'Lade Beiträge …');
+    say(total?`Lade Beitragsverzeichnis: ${i-1} von ${total} …`:'Lade Beitragsverzeichnis …');
     const r=await getJSON(`${S}?alt=json&max-results=500&start-index=${i}`,60000);
-    const e=r.feed.entry||[];
+    const en=r.feed.entry||[];
     total=+((r.feed['openSearch$totalResults']||{}).$t)||total;
-    if(!e.length)break;
-    e.forEach(x=>(x.category||[]).forEach(c=>set.add(c.term)));
-    store.set('labels',[...set].sort((a,b)=>a.localeCompare(b,'en',{numeric:true})));
-    i+=e.length;
-    if(total&&i>total)break;
+    if(!en.length)break;
+    for(const x of en){
+      const a=(x.link||[]).find(l=>l.rel==='alternate');if(!a)continue;
+      pmap[keyOf(a.href)]=[(x.id.$t.match(/post-(\d+)/)||[])[1],x.title.$t,(x.published.$t||'').slice(0,10)];
+    }
+    i+=en.length;
+    if(!full||(total&&i>total))break;
   }
-  const l=[...set].sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));
-  store.set('labels',l);return l;
+  store.set('pmap',pmap);
 }
-async function addLabel(name){
-  const list=await loadPosts(name).catch(()=>[]);
-  if(!list.length)return false;
-  const l=store.get('labels',[]);
-  if(!l.includes(name)){l.push(name);l.sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));store.set('labels',l)}
-  return true;
+async function loadPost(k){
+  if(cache[k])return cache[k];
+  const m=pmap&&pmap[k];let e;
+  if(m&&m[0]){try{e=(await getJSON(`${FEED}/posts/default/${m[0]}?alt=json`,30000)).entry}catch{}}
+  if(!e){e=((await getJSON(`${FEED}/posts/default?alt=json&path=${enc(k)}`,30000)).feed.entry||[])[0]}
+  if(!e)throw new Error('Beitrag nicht gefunden');
+  return cache[k]={title:e.title.$t,date:(e.published.$t||'').slice(0,10),html:(e.content||e.summary||{$t:''}).$t,
+    url:((e.link||[]).find(l=>l.rel==='alternate')||{}).href};
 }
-async function loadPosts(label,force){
-  if(posts[label]&&!force)return posts[label];
-  let d;
-  try{d=await getJSON(`${BASE}/-/${enc(label)}?alt=json&max-results=150&orderby=published`)}
-  catch(e){const c=store.get('p:'+label,null);if(c)return posts[label]=c;throw e}
-  const list=(d.feed.entry||[]).map(e=>({
-    id:e.id.$t,title:e.title.$t,date:(e.published.$t||'').slice(0,10),
-    url:(e.link.find(l=>l.rel==='alternate')||{}).href,html:(e.content||e.summary||{$t:''}).$t
-  })).reverse();
-  store.set('p:'+label,list);
-  return posts[label]=list;
-}
+
 function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back;$('#reload').hidden=!!back}
-function save(){store.set('progress',progress);store.set('done',done)}
 
 async function home(){
   setHead('CRPG Reader',false);
+  if(!games||!pmap){
+    app.innerHTML='<div class="msg" id="sm">Einmalige Einrichtung …<br>Das dauert ein bis zwei Minuten.</div>';
+    try{await setup(t=>{const s=$('#sm');if(s)s.textContent=t},true)}
+    catch(e){app.innerHTML=`<div class="msg">Einrichtung fehlgeschlagen.<br><small>${esc(e.message)}</small><br><br><button id="retry">Nochmal versuchen</button></div>`;$('#retry').onclick=()=>route();return}
+  }
   const last=Object.entries(progress).sort((a,b)=>b[1].ts-a[1].ts)[0];
   app.innerHTML=(last?`<a class="cont" href="#/p/${enc(last[0])}/${last[1].idx}"><small>Weiterlesen</small><b>${esc(last[0])}</b><span>${esc(last[1].title)}</span></a>`:'')
-    +'<input id="q" type="search" placeholder="Spiel suchen" autocomplete="off"><div id="list"><div class="msg">Lade Spieleliste …</div></div><div class="more"><button id="crawl">Fehlt ein Spiel? Liste vollständig laden</button><div id="cm" class="meta"></div></div>';
-  let labels;
-  try{labels=await loadLabels()}catch(e){$('#list').innerHTML='<div class="msg">Die Spieleliste konnte nicht geladen werden. Prüfe die Verbindung und tippe auf „Neu laden“.<br><small>'+esc(e.message)+'</small></div>';return}
+    +'<input id="q" type="search" placeholder="Spiel suchen" autocomplete="off"><div id="list"></div>';
   const draw=()=>{
     const q=$('#q').value.trim().toLowerCase();
-    const f=labels.filter(l=>l.toLowerCase().includes(q));
-    $('#list').innerHTML=f.length?f.map(l=>{
-      const p=progress[l],d=done[l];
-      return `<a class="row${d?' done':''}" href="#/g/${enc(l)}"><span>${esc(l)}</span>${d?'<i>✓ fertig</i>':p?`<i>Beitrag ${p.idx+1}${p.total?'/'+p.total:''}</i>`:''}</a>`;
-    }).join(''):`<div class="msg">Kein Spiel gefunden.${q?`<br><br><button id="try">„${esc($('#q').value.trim())}“ direkt im Blog versuchen</button>`:''}</div>`;
-    const t=$('#try');
-    if(t)t.onclick=async()=>{
-      const name=$('#q').value.trim();t.disabled=true;t.textContent='Suche …';
-      if(await addLabel(name)){labels=store.get('labels',labels);location.hash='#/g/'+enc(name)}
-      else{t.textContent='Nichts gefunden. Schreibe den Namen wie im Blog oder lade die Liste vollständig.'}
-    };
-  };
-  $('#crawl').onclick=async()=>{
-    const b=$('#crawl'),m=$('#cm');b.disabled=true;
-    try{labels=await crawlLabels(t=>{m.textContent=t});m.textContent=`Fertig: ${labels.length} Einträge in der Liste.`;draw()}
-    catch(e){m.textContent='Fehler: '+e.message}
-    b.disabled=false;
+    const f=games.filter(g=>g.n.toLowerCase().includes(q));
+    $('#list').innerHTML=f.length?f.map(g=>{
+      const p=progress[g.n],d=done[g.n];
+      return `<a class="row${d?' done':''}" href="#/g/${enc(g.n)}"><span>${esc(g.n)}</span>${d?'<i>✓ fertig</i>':p?`<i>Beitrag ${p.idx+1}/${g.l.length}</i>`:''}</a>`;
+    }).join(''):'<div class="msg">Kein Spiel gefunden.</div>';
   };
   $('#q').oninput=draw;draw();
 }
 
-async function game(label){
-  setHead(label,true);
-  app.innerHTML='<div class="msg">Lade Beiträge …</div>';
-  let list;
-  try{list=await loadPosts(label)}catch(e){app.innerHTML='<div class="msg">Beiträge konnten nicht geladen werden.</div>';return}
-  const p=progress[label]||{};
-  const html=list.map((x,i)=>{
-    const cls=i===p.idx?'row cur':(p.read&&p.read[x.id]?'row done':'row');
-    return `<a class="${cls}" href="#/p/${enc(label)}/${i}"><span>${esc(x.title)}</span><i>${x.date}</i></a>`;
+function game(name){
+  setHead(name,true);
+  const g=games&&games.find(x=>x.n===name);
+  if(!g){location.hash='#/';return}
+  const p=progress[name]||{};
+  const rows=g.l.map(([k,t],i)=>{
+    const m=pmap&&pmap[k],cls=i===p.idx?'row cur':(p.read&&p.read[k]?'row done':'row');
+    return `<a class="${cls}" href="#/p/${enc(name)}/${i}"><span>${esc(m?m[1]:t)}</span><i>${esc(t)}</i></a>`;
   }).join('');
-  app.innerHTML=`<div class="fin"><label><input type="checkbox" id="fin"${done[label]?' checked':''}> Fertig gelesen</label><button id="rst"${progress[label]?'':' disabled'}>Fortschritt zurücksetzen</button></div>`
-    +(list.length?html:'<div class="msg">Keine Beiträge gefunden.</div>');
+  app.innerHTML=`<div class="fin"><label><input type="checkbox" id="fin"${done[name]?' checked':''}> Fertig gelesen</label><button id="rst"${progress[name]?'':' disabled'}>Fortschritt zurücksetzen</button></div>`+rows;
   $('#fin').onchange=e=>{
     if(e.target.checked){
       if(!confirm('Als fertig gelesen markieren? Dein Lesefortschritt für dieses Spiel wird gelöscht.')){e.target.checked=false;return}
-      done[label]=Date.now();delete progress[label];
-    }else delete done[label];
-    save(label);game(label);
+      done[name]=Date.now();delete progress[name];
+    }else delete done[name];
+    save();game(name);
   };
   $('#rst').onclick=()=>{
     if(!confirm('Lesefortschritt für dieses Spiel zurücksetzen? Die gemerkte Stelle und die Gelesen-Markierungen werden gelöscht.'))return;
-    delete progress[label];save(label);game(label);
+    delete progress[name];save();game(name);
   };
   const cur=app.querySelector('.cur');if(cur)cur.scrollIntoView({block:'center'});
 }
 
-async function post(label,idx){
-  setHead(label,true);
+async function post(name,idx){
+  setHead(name,true);
+  const g=games&&games.find(x=>x.n===name);
+  if(!g){location.hash='#/';return}
+  const lk=g.l[idx];
+  if(!lk){location.hash='#/g/'+enc(name);return}
   app.innerHTML='<div class="msg">Lade Beitrag …</div>';
-  let list;
-  try{list=await loadPosts(label)}catch(e){app.innerHTML='<div class="msg">Beitrag konnte nicht geladen werden.</div>';return}
-  const x=list[idx];
-  if(!x){location.hash='#/g/'+enc(label);return}
-  const old=progress[label]||{read:{}};
+  let x;
+  try{x=await loadPost(lk[0])}
+  catch(e){app.innerHTML=`<div class="msg">Beitrag konnte nicht geladen werden.<br><small>${esc(e.message)}</small></div>`;return}
+  const old=progress[name]||{read:{}};
   const resume=old.idx===idx?old.scroll||0:0;
   if(old.idx!==undefined&&old.idx!==idx&&old.id)old.read[old.id]=1;
-  progress[label]={idx,id:x.id,title:x.title,scroll:resume,ts:Date.now(),total:list.length,read:old.read||{}};
-  save(label);
-  const prev=idx>0?`<a href="#/p/${enc(label)}/${idx-1}">‹ Vorheriger</a>`:'<span>‹ Vorheriger</span>';
-  const next=idx<list.length-1?`<a href="#/p/${enc(label)}/${idx+1}">Nächster ›</a>`:`<a href="#" id="fin">${done[label]?'✓ Fertig gelesen (rückgängig)':'Fertig gelesen ✓'}</a>`;
-  app.innerHTML=`<article><h2>${esc(x.title)}</h2><div class="meta">${x.date} · Beitrag ${idx+1} von ${list.length}${x.url?` · <a href="${esc(x.url)}" target="_blank" rel="noopener">Original</a>`:''}</div>${x.html}</article><div class="nav">${prev}${next}</div>`;
+  progress[name]={idx,id:lk[0],title:x.title,scroll:resume,ts:Date.now(),total:g.l.length,read:old.read||{}};
+  save();
+  const prev=idx>0?`<a href="#/p/${enc(name)}/${idx-1}">‹ Vorheriger</a>`:'<span>‹ Vorheriger</span>';
+  const next=idx<g.l.length-1?`<a href="#/p/${enc(name)}/${idx+1}">Nächster ›</a>`:`<a href="#" id="fin">${done[name]?'✓ Fertig gelesen (rückgängig)':'Fertig gelesen ✓'}</a>`;
+  app.innerHTML=`<article><h2>${esc(x.title)}</h2><div class="meta">${x.date} · Beitrag ${idx+1} von ${g.l.length}${x.url?` · <a href="${esc(x.url)}" target="_blank" rel="noopener">Original</a>`:''}</div>${x.html}</article><div class="nav">${prev}${next}</div>`;
   app.querySelectorAll('article a').forEach(a=>{a.target='_blank';a.rel='noopener'});
-  const fb=$('#fin');if(fb)fb.onclick=e=>{e.preventDefault();finish(label,idx)};
+  const fb=$('#fin');if(fb)fb.onclick=e=>{e.preventDefault();finish(name,idx)};
   window.scrollTo(0,resume);
 }
 
@@ -231,31 +242,30 @@ addEventListener('scroll',()=>{
   const m=location.hash.split('/');if(m[1]!=='p')return;
   clearTimeout(sv);
   sv=setTimeout(()=>{
-    const label=decodeURIComponent(m[2]||''),p=progress[label];
+    const name=decodeURIComponent(m[2]||''),p=progress[name];
     if(!p||p.idx!==+m[3])return;
     p.scroll=Math.round(scrollY);p.ts=Date.now();
     if(scrollY+innerHeight>=document.documentElement.scrollHeight-200)p.read[p.id]=1;
-    save(label);
+    save();
   },300);
 },{passive:true});
 
-function finish(label,idx){
-  if(done[label]){delete done[label];save(label);post(label,idx);return}
+function finish(name,idx){
+  if(done[name]){delete done[name];save();post(name,idx);return}
   if(!confirm('Als fertig gelesen markieren? Dein Lesefortschritt für dieses Spiel wird gelöscht.'))return;
-  done[label]=Date.now();delete progress[label];save(label);location.hash='#/';
+  done[name]=Date.now();delete progress[name];save();location.hash='#/';
 }
 function route(){
   const [,t,a,b]=location.hash.slice(1).split('/').map(s=>s&&decodeURIComponent(s));
-  if(t==='g'&&a)game(a);else if(t==='p'&&a)post(a,+b||0);else{home();window.scrollTo(0,0)}
+  if(t==='g'&&a)game(a);else if(t==='p'&&a)post(a,+b||0);else home();
   if(t!=='p')window.scrollTo(0,0);
 }
 addEventListener('hashchange',route);
-$('#back').onclick=()=>{const t=location.hash.split('/')[1];location.hash=t==='p'?'#/g/'+location.hash.split('/')[2]:'#/'};
+$('#back').onclick=()=>{const m=location.hash.split('/');location.hash=m[1]==='p'?'#/g/'+m[2]:'#/'};
 $('#reload').onclick=async()=>{
-  const m=location.hash.split('/');
-  if(m[1]==='g'||m[1]==='p'){const l=decodeURIComponent(m[2]);delete posts[l];await loadPosts(l,true).catch(()=>{})}
-  else await loadLabels(true).catch(()=>{});
-  route();
+  const b=$('#reload');b.disabled=true;b.textContent='Lädt …';
+  try{await setup(()=>{},false)}catch(e){alert('Aktualisieren fehlgeschlagen: '+e.message)}
+  b.disabled=false;b.textContent='Neu laden';route();
 };
 route();
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
