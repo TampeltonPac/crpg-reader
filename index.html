@@ -32,6 +32,8 @@ input[type=search]{width:100%;font:inherit;color:var(--txt);background:var(--sur
 .row i{font-style:normal;color:var(--dim);font-size:14px;white-space:nowrap}
 .row.cur{border-left:3px solid var(--acc);padding-left:10px}
 .row.done{color:var(--dim)}
+.fin{display:flex;gap:12px;align-items:center;padding:12px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+.fin input{width:22px;height:22px;accent-color:var(--acc)}
 .msg{color:var(--dim);padding:24px 0;text-align:center}
 article{font:19px/1.6 var(--read);overflow-wrap:break-word}
 article h2{font:600 24px/1.25 var(--read);margin:.2em 0 .6em}
@@ -57,7 +59,8 @@ const $=s=>document.querySelector(s),app=$('#app');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const enc=encodeURIComponent;
 const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
-let progress=store.get('progress',{}); // Spiel -> {idx,title,scroll,ts,total,read:{id:1}}
+let progress=store.get('progress',{});
+let done=store.get('done',{}); // Spiel -> Zeitstempel (fertig gelesen) // Spiel -> {idx,title,scroll,ts,total,read:{id:1}}
 const posts={};
 
 function jsonp(url){
@@ -116,7 +119,7 @@ async function loadPosts(label,force){
   return posts[label]=list;
 }
 function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back}
-function save(){store.set('progress',progress)}
+function save(){store.set('progress',progress);store.set('done',done)}
 
 async function home(){
   setHead('CRPG Reader',false);
@@ -129,8 +132,8 @@ async function home(){
     const q=$('#q').value.trim().toLowerCase();
     const f=labels.filter(l=>l.toLowerCase().includes(q));
     $('#list').innerHTML=f.length?f.map(l=>{
-      const p=progress[l];
-      return `<a class="row" href="#/g/${enc(l)}"><span>${esc(l)}</span>${p?`<i>Beitrag ${p.idx+1}${p.total?'/'+p.total:''}</i>`:''}</a>`;
+      const p=progress[l],d=done[l];
+      return `<a class="row${d?' done':''}" href="#/g/${enc(l)}"><span>${esc(l)}</span>${d?'<i>✓ fertig</i>':p?`<i>Beitrag ${p.idx+1}${p.total?'/'+p.total:''}</i>`:''}</a>`;
     }).join(''):'<div class="msg">Kein Spiel gefunden.</div>';
   };
   $('#q').oninput=draw;draw();
@@ -146,7 +149,15 @@ async function game(label){
     const cls=i===p.idx?'row cur':(p.read&&p.read[x.id]?'row done':'row');
     return `<a class="${cls}" href="#/p/${enc(label)}/${i}"><span>${esc(x.title)}</span><i>${x.date}</i></a>`;
   }).join('');
-  app.innerHTML=(list.length?html:'<div class="msg">Keine Beiträge gefunden.</div>');
+  app.innerHTML=`<label class="fin"><input type="checkbox" id="fin"${done[label]?' checked':''}> Spiel als fertig gelesen markieren</label>`
+    +(list.length?html:'<div class="msg">Keine Beiträge gefunden.</div>');
+  $('#fin').onchange=e=>{
+    if(e.target.checked){
+      if(!confirm('Als fertig gelesen markieren? Dein Lesefortschritt für dieses Spiel wird gelöscht.')){e.target.checked=false;return}
+      done[label]=Date.now();delete progress[label];
+    }else delete done[label];
+    save();game(label);
+  };
   const cur=app.querySelector('.cur');if(cur)cur.scrollIntoView({block:'center'});
 }
 
@@ -163,9 +174,10 @@ async function post(label,idx){
   progress[label]={idx,id:x.id,title:x.title,scroll:resume,ts:Date.now(),total:list.length,read:old.read||{}};
   save();
   const prev=idx>0?`<a href="#/p/${enc(label)}/${idx-1}">‹ Vorheriger</a>`:'<span>‹ Vorheriger</span>';
-  const next=idx<list.length-1?`<a href="#/p/${enc(label)}/${idx+1}">Nächster ›</a>`:'<span>Nächster ›</span>';
+  const next=idx<list.length-1?`<a href="#/p/${enc(label)}/${idx+1}">Nächster ›</a>`:'<a href="#" id="fin">Fertig gelesen ✓</a>';
   app.innerHTML=`<article><h2>${esc(x.title)}</h2><div class="meta">${x.date} · Beitrag ${idx+1} von ${list.length}${x.url?` · <a href="${esc(x.url)}" target="_blank" rel="noopener">Original</a>`:''}</div>${x.html}</article><div class="nav">${prev}${next}</div>`;
   app.querySelectorAll('article a').forEach(a=>{a.target='_blank';a.rel='noopener'});
+  const fb=$('#fin');if(fb)fb.onclick=e=>{e.preventDefault();finish(label)};
   window.scrollTo(0,resume);
 }
 
@@ -182,6 +194,10 @@ addEventListener('scroll',()=>{
   },300);
 },{passive:true});
 
+function finish(label){
+  if(!confirm('Als fertig gelesen markieren? Dein Lesefortschritt für dieses Spiel wird gelöscht.'))return;
+  done[label]=Date.now();delete progress[label];save();location.hash='#/';
+}
 function route(){
   const [,t,a,b]=location.hash.slice(1).split('/').map(s=>s&&decodeURIComponent(s));
   if(t==='g'&&a)game(a);else if(t==='p'&&a)post(a,+b||0);else{home();window.scrollTo(0,0)}
