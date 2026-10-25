@@ -32,7 +32,10 @@ input[type=search]{width:100%;font:inherit;color:var(--txt);background:var(--sur
 .row i{font-style:normal;color:var(--dim);font-size:14px;white-space:nowrap}
 .row.cur{border-left:3px solid var(--acc);padding-left:10px}
 .row.done{color:var(--dim)}
-.fin{display:flex;gap:12px;align-items:center;padding:12px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+.fin{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center;justify-content:space-between;padding:10px 2px;border-bottom:1px solid var(--line)}
+.fin label{display:flex;gap:10px;align-items:center;cursor:pointer}
+.fin button{font:14px var(--ui);color:var(--acc);background:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer}
+.fin button:disabled{opacity:.4;cursor:default}
 .fin input{width:22px;height:22px;accent-color:var(--acc)}
 .msg{color:var(--dim);padding:24px 0;text-align:center}
 article{font:19px/1.6 var(--read);overflow-wrap:break-word}
@@ -149,7 +152,7 @@ async function game(label){
     const cls=i===p.idx?'row cur':(p.read&&p.read[x.id]?'row done':'row');
     return `<a class="${cls}" href="#/p/${enc(label)}/${i}"><span>${esc(x.title)}</span><i>${x.date}</i></a>`;
   }).join('');
-  app.innerHTML=`<label class="fin"><input type="checkbox" id="fin"${done[label]?' checked':''}> Spiel als fertig gelesen markieren</label>`
+  app.innerHTML=`<div class="fin"><label><input type="checkbox" id="fin"${done[label]?' checked':''}> Fertig gelesen</label><button id="rst"${progress[label]?'':' disabled'}>Fortschritt zurücksetzen</button></div>`
     +(list.length?html:'<div class="msg">Keine Beiträge gefunden.</div>');
   $('#fin').onchange=e=>{
     if(e.target.checked){
@@ -157,6 +160,10 @@ async function game(label){
       done[label]=Date.now();delete progress[label];
     }else delete done[label];
     save();game(label);
+  };
+  $('#rst').onclick=()=>{
+    if(!confirm('Lesefortschritt für dieses Spiel zurücksetzen? Die gemerkte Stelle und die Gelesen-Markierungen werden gelöscht.'))return;
+    delete progress[label];save();game(label);
   };
   const cur=app.querySelector('.cur');if(cur)cur.scrollIntoView({block:'center'});
 }
