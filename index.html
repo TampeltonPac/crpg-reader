@@ -50,7 +50,8 @@ article iframe{max-width:100%}
 <header><button id="back" hidden>‹ Zurück</button><h1 id="ttl">CRPG Reader</h1><button id="reload" title="Neu laden">Neu laden</button></header>
 <main id="app"></main>
 <script>
-const BASE='https://www.crpgaddict.com/feeds/posts/default';
+const HOSTS=['https://crpgaddict.blogspot.com','https://www.crpgaddict.com'];
+const BASE=HOSTS[0]+'/feeds/posts/default';
 const PROXIES=[u=>u,u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://corsproxy.io/?'+encodeURIComponent(u)];
 const $=s=>document.querySelector(s),app=$('#app');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -63,7 +64,7 @@ function jsonp(url){
   return new Promise((res,rej)=>{
     const cb='cb'+Math.random().toString(36).slice(2),el=document.createElement('script');
     const done=()=>{clearTimeout(t);delete window[cb];el.remove()};
-    const t=setTimeout(()=>{done();rej(new Error('Zeitüberschreitung'))},20000);
+    const t=setTimeout(()=>{done();rej(new Error('keine gültige Antwort'))},12000);
     window[cb]=d=>{done();res(d)};
     el.onerror=()=>{done();rej(new Error('Skript blockiert oder nicht erreichbar'))};
     el.src=url.replace('alt=json','alt=json-in-script')+'&callback='+cb;
@@ -72,9 +73,12 @@ function jsonp(url){
 }
 async function getJSON(url){
   const errs=[];
-  try{return await jsonp(url)}catch(e){errs.push('JSONP: '+e.message)}
-  for(const p of PROXIES){
-    try{const r=await fetch(p(url));if(r.ok)return await r.json();errs.push('HTTP '+r.status)}catch(e){errs.push(e.message)}
+  for(const h of HOSTS){
+    const u=url.replace(HOSTS[0],h);
+    try{return await jsonp(u)}catch(e){errs.push(h.replace('https://','')+': '+e.message)}
+  }
+  for(const p of PROXIES.slice(1)){
+    try{const r=await fetch(p(url));if(r.ok){const t=await r.text();return JSON.parse(t)}errs.push('Proxy HTTP '+r.status)}catch(e){errs.push('Proxy: '+e.message)}
   }
   throw new Error(errs.join(' | '));
 }
