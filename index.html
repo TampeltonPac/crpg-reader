@@ -59,28 +59,56 @@ const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{re
 let progress=store.get('progress',{}); // Spiel -> {idx,title,scroll,ts,total,read:{id:1}}
 const posts={};
 
+function jsonp(url){
+  return new Promise((res,rej)=>{
+    const cb='cb'+Math.random().toString(36).slice(2),el=document.createElement('script');
+    const done=()=>{clearTimeout(t);delete window[cb];el.remove()};
+    const t=setTimeout(()=>{done();rej(new Error('Zeitüberschreitung'))},20000);
+    window[cb]=d=>{done();res(d)};
+    el.onerror=()=>{done();rej(new Error('Skript blockiert oder nicht erreichbar'))};
+    el.src=url.replace('alt=json','alt=json-in-script')+'&callback='+cb;
+    document.head.appendChild(el);
+  });
+}
 async function getJSON(url){
-  let err;
-  for(const p of PROXIES){try{const r=await fetch(p(url));if(r.ok)return await r.json()}catch(e){err=e}}
-  throw err||new Error('Laden fehlgeschlagen');
+  const errs=[];
+  try{return await jsonp(url)}catch(e){errs.push('JSONP: '+e.message)}
+  for(const p of PROXIES){
+    try{const r=await fetch(p(url));if(r.ok)return await r.json();errs.push('HTTP '+r.status)}catch(e){errs.push(e.message)}
+  }
+  throw new Error(errs.join(' | '));
 }
 async function loadLabels(force){
   let l=store.get('labels',null);
-  if(l&&!force)return l;
+  if(l&&l.length&&!force)return l;
   try{
+    const set=new Set();
     const d=await getJSON(BASE+'?alt=json&max-results=0');
-    l=(d.feed.category||[]).map(c=>c.term).sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));
-    store.set('labels',l);
-  }catch(e){if(!l)throw e}
+    (d.feed.category||[]).forEach(c=>set.add(c.term));
+    if(!set.size){
+      const S=BASE.replace('/default','/summary');
+      for(let i=1;i<=5000;i+=500){
+        const r=await getJSON(`${S}?alt=json&max-results=500&start-index=${i}`);
+        const e=r.feed.entry||[];
+        e.forEach(x=>(x.category||[]).forEach(c=>set.add(c.term)));
+        if(e.length<500)break;
+      }
+    }
+    l=[...set].sort((a,b)=>a.localeCompare(b,'en',{numeric:true}));
+    if(l.length)store.set('labels',l);
+  }catch(e){if(!l||!l.length)throw e}
   return l;
 }
 async function loadPosts(label,force){
   if(posts[label]&&!force)return posts[label];
-  const d=await getJSON(`${BASE}/-/${enc(label)}?alt=json&max-results=150&orderby=published`);
+  let d;
+  try{d=await getJSON(`${BASE}/-/${enc(label)}?alt=json&max-results=150&orderby=published`)}
+  catch(e){const c=store.get('p:'+label,null);if(c)return posts[label]=c;throw e}
   const list=(d.feed.entry||[]).map(e=>({
     id:e.id.$t,title:e.title.$t,date:(e.published.$t||'').slice(0,10),
     url:(e.link.find(l=>l.rel==='alternate')||{}).href,html:(e.content||e.summary||{$t:''}).$t
   })).reverse();
+  store.set('p:'+label,list);
   return posts[label]=list;
 }
 function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back}
@@ -92,7 +120,7 @@ async function home(){
   app.innerHTML=(last?`<a class="cont" href="#/p/${enc(last[0])}/${last[1].idx}"><small>Weiterlesen</small><b>${esc(last[0])}</b><span>${esc(last[1].title)}</span></a>`:'')
     +'<input id="q" type="search" placeholder="Spiel suchen" autocomplete="off"><div id="list"><div class="msg">Lade Spieleliste …</div></div>';
   let labels;
-  try{labels=await loadLabels()}catch(e){$('#list').innerHTML='<div class="msg">Die Spieleliste konnte nicht geladen werden. Prüfe die Verbindung und tippe auf „Neu laden“.</div>';return}
+  try{labels=await loadLabels()}catch(e){$('#list').innerHTML='<div class="msg">Die Spieleliste konnte nicht geladen werden. Prüfe die Verbindung und tippe auf „Neu laden“.<br><small>'+esc(e.message)+'</small></div>';return}
   const draw=()=>{
     const q=$('#q').value.trim().toLowerCase();
     const f=labels.filter(l=>l.toLowerCase().includes(q));
