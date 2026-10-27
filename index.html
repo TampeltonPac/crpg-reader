@@ -39,6 +39,14 @@ input[type=search]{width:100%;font:inherit;color:var(--txt);background:var(--sur
 .fin input{width:22px;height:22px;accent-color:var(--acc)}
 .more{margin:22px 0 6px;text-align:center}
 .more button,.msg button{font:15px var(--ui);color:var(--acc);background:none;border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:pointer}
+#mnu{position:absolute;right:12px;top:100%;min-width:250px;background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:20}
+#mnu h4{margin:8px 10px 4px;font:600 12px var(--ui);color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+#mnu button{display:block;width:100%;text-align:left;padding:10px;border-radius:8px;color:var(--txt);font:16px var(--ui)}
+#mnu button.on{color:var(--acc)}
+#mnu button.on::after{content:' ✓'}
+#mnu hr{border:0;border-top:1px solid var(--line);margin:6px 0}
+#menu{font-size:24px;line-height:1;padding:4px 6px}
+#vinfo{margin:2px 2px 0}
 .msg{color:var(--dim);padding:24px 0;text-align:center}
 article{font:19px/1.6 var(--read);overflow-wrap:break-word}
 article h2{font:600 24px/1.25 var(--read);margin:.2em 0 .6em}
@@ -54,7 +62,7 @@ article iframe{max-width:100%}
 </style>
 </head>
 <body>
-<header><button id="back" hidden>‹ Zurück</button><h1 id="ttl">CRPG Reader</h1><button id="reload" title="Neu laden">Neu laden</button></header>
+<header><button id="back" hidden>‹ Zurück</button><h1 id="ttl">CRPG Reader</h1><button id="menu" aria-label="Menü">⋮</button><div id="mnu" hidden></div></header>
 <main id="app"></main>
 <script>
 const HOSTS=['https://crpgaddict.blogspot.com','https://www.crpgaddict.com'];
@@ -66,6 +74,8 @@ const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{re
 try{Object.keys(localStorage).forEach(k=>{if(k==='labels'||k.startsWith('p:'))localStorage.removeItem(k)})}catch{}
 let progress=store.get('progress2',{}); // Spiel -> {idx,id,title,scroll,ts,total,read:{}}
 let done=store.get('done2',{});         // Spiel -> Zeitstempel (fertig gelesen)
+let view=store.get('view',{sort:'az',filter:'all'}); // Sortierung und Anzeige
+let redraw=null;
 let games=store.get('games',null);      // [{n:Name, l:[[Pfad,Linktext],...]}]
 let pmap=store.get('pmap',null);        // Pfad -> [PostId,Titel,Datum]
 const cache={};
@@ -167,7 +177,29 @@ async function loadPost(k){
     url:((e.link||[]).find(l=>l.rel==='alternate')||{}).href};
 }
 
-function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back;$('#reload').hidden=!!back}
+function setHead(t,back){$('#ttl').textContent=t;$('#back').hidden=!back;$('#menu').hidden=!!back;$('#mnu').hidden=true}
+const yearOf=n=>{const m=n.match(/\((\d{4})/);return m?+m[1]:9999};
+const dateOf=g=>{
+  let b='9999';
+  for(const [k] of g.l){
+    const m=pmap&&pmap[k],pm=k.match(/^\/(\d{4})\/(\d\d)\//);
+    const d=(m&&m[2])||(pm?pm[1]+'-'+pm[2]:'');
+    if(d&&d<b)b=d;
+  }
+  return b;
+};
+const stOf=g=>done[g.n]?'done':progress[g.n]?'reading':'new';
+function visible(q){
+  const az=(a,b)=>a.n.localeCompare(b.n,'en',{numeric:true});
+  let f=games.filter(g=>g.n.toLowerCase().includes(q));
+  if(view.filter!=='all')f=f.filter(g=>stOf(g)===view.filter);
+  if(view.sort==='year')return f.sort((a,b)=>yearOf(a.n)-yearOf(b.n)||az(a,b));
+  if(view.sort==='played'){
+    const dk=new Map(f.map(g=>[g,dateOf(g)]));
+    return f.sort((a,b)=>dk.get(a)<dk.get(b)?-1:dk.get(a)>dk.get(b)?1:az(a,b));
+  }
+  return f.sort(az);
+}
 
 async function home(){
   setHead('CRPG Reader',false);
@@ -178,15 +210,20 @@ async function home(){
   }
   const last=Object.entries(progress).sort((a,b)=>b[1].ts-a[1].ts)[0];
   app.innerHTML=(last?`<a class="cont" href="#/p/${enc(last[0])}/${last[1].idx}"><small>Weiterlesen</small><b>${esc(last[0])}</b><span>${esc(last[1].title)}</span></a>`:'')
-    +'<input id="q" type="search" placeholder="Spiel suchen" autocomplete="off"><div id="list"></div>';
+    +'<input id="q" type="search" placeholder="Spiel suchen" autocomplete="off"><div id="vinfo" class="meta"></div><div id="list"></div>';
   const draw=()=>{
-    const q=$('#q').value.trim().toLowerCase();
-    const f=games.filter(g=>g.n.toLowerCase().includes(q));
+    if(!$('#list'))return;
+    const f=visible($('#q').value.trim().toLowerCase());
+    const bits=[];
+    if(view.filter!=='all')bits.push({new:'Noch nicht gelesen',reading:'Gerade am Lesen',done:'Fertig gelesen'}[view.filter]);
+    if(view.sort!=='az')bits.push({played:'In gespielter Reihenfolge',year:'Nach Erscheinungsjahr'}[view.sort]);
+    $('#vinfo').textContent=bits.length?`${f.length} Spiele · ${bits.join(' · ')}`:'';
     $('#list').innerHTML=f.length?f.map(g=>{
       const p=progress[g.n],d=done[g.n];
       return `<a class="row${d?' done':''}" href="#/g/${enc(g.n)}"><span>${esc(g.n)}</span>${d?'<i>✓ fertig</i>':p?`<i>Beitrag ${p.idx+1}/${g.l.length}</i>`:''}</a>`;
-    }).join(''):'<div class="msg">Kein Spiel gefunden.</div>';
+    }).join(''):'<div class="msg">Keine Spiele in dieser Ansicht.</div>';
   };
+  redraw=draw;
   $('#q').oninput=draw;draw();
 }
 
@@ -262,11 +299,26 @@ function route(){
 }
 addEventListener('hashchange',route);
 $('#back').onclick=()=>{const m=location.hash.split('/');location.hash=m[1]==='p'?'#/g/'+m[2]:'#/'};
-$('#reload').onclick=async()=>{
-  const b=$('#reload');b.disabled=true;b.textContent='Lädt …';
+function drawMenu(){
+  const o=(g,v,t)=>`<button data-g="${g}" data-v="${v}"${view[g]===v?' class="on"':''}>${t}</button>`;
+  $('#mnu').innerHTML='<h4>Sortieren</h4>'+o('sort','az','Alphabetisch')+o('sort','played','In gespielter Reihenfolge')+o('sort','year','Nach Erscheinungsjahr')
+    +'<hr><h4>Anzeigen</h4>'+o('filter','all','Alle Spiele')+o('filter','new','Noch nicht gelesen')+o('filter','reading','Gerade am Lesen')+o('filter','done','Fertig gelesen')
+    +'<hr><button id="mreload">Neu laden</button>';
+}
+async function reloadAll(){
+  const b=$('#menu');b.textContent='…';b.disabled=true;
   try{await setup(()=>{},false)}catch(e){alert('Aktualisieren fehlgeschlagen: '+e.message)}
-  b.disabled=false;b.textContent='Neu laden';route();
+  b.textContent='⋮';b.disabled=false;route();
+}
+$('#menu').onclick=e=>{e.stopPropagation();const m=$('#mnu');if(m.hidden){drawMenu();m.hidden=false}else m.hidden=true};
+$('#mnu').onclick=e=>{
+  const b=e.target.closest('button');if(!b)return;
+  $('#mnu').hidden=true;
+  if(b.id==='mreload'){reloadAll();return}
+  view[b.dataset.g]=b.dataset.v;store.set('view',view);
+  if(redraw)redraw();
 };
+document.addEventListener('click',e=>{if(!e.target.closest('#mnu'))$('#mnu').hidden=true});
 route();
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
