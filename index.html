@@ -7,13 +7,13 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="CRPG Reader">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#14202b">
+<meta name="theme-color" content="#171717">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.png">
 <title>CRPG Reader</title>
 <style>
-:root{--bg:#14202b;--surf:#1d2d3b;--line:#2c4052;--txt:#e6e2d6;--dim:#93a3b1;--acc:#e0b04a;--accfg:#14202b;
---ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;--read:"Iowan Old Style","Palatino Linotype",Georgia,serif}
+:root{--bg:#171717;--surf:#1E1E1E;--line:#333;--txt:#E0E0E0;--dim:#9a9a9a;--acc:#e0b04a;--accfg:#171717;
+--ui:Inter,Roboto,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;--read:var(--ui)}
 @media(prefers-color-scheme:light){:root{--bg:#eef1f4;--surf:#fff;--line:#d3dbe2;--txt:#1b2733;--dim:#5d6e7d;--acc:#8a5a00;--accfg:#fff}}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -48,10 +48,12 @@ input[type=search]{width:100%;font:inherit;color:var(--txt);background:var(--sur
 #menu{font-size:24px;line-height:1;padding:4px 6px}
 #vinfo{margin:2px 2px 0}
 .msg{color:var(--dim);padding:24px 0;text-align:center}
-article{font:19px/1.6 var(--read);overflow-wrap:break-word}
+article{font:400 18px/1.55 var(--read);text-align:left;overflow-wrap:break-word}
 article h2{font:600 24px/1.25 var(--read);margin:.2em 0 .6em}
 article img{max-width:100%!important;height:auto!important;border-radius:4px}
-article .separator,article .tr-caption-container{margin:12px 0!important;text-align:center}
+article div,article p,article span,article blockquote{text-align:left!important}
+article :where(div,p,span,font,b,i,em,strong,u,li,td,blockquote){color:inherit!important;font-family:inherit!important;background:transparent!important}
+article .separator,article .tr-caption-container{margin:12px 0!important;text-align:center!important}
 article table{max-width:100%}
 article iframe{max-width:100%}
 .nav{display:flex;gap:10px;margin:28px 0 12px}
