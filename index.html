@@ -55,7 +55,9 @@ article div,article p,article span,article blockquote{text-align:left!important}
 article :where(div,p,span,font,b,i,em,strong,u,li,td,blockquote){color:inherit!important;font-family:inherit!important;background:transparent!important}
 article .separator,article .tr-caption-container{margin:12px 0!important;text-align:center!important}
 article table{max-width:100%}
-article iframe{max-width:100%}
+.vwrap{margin:16px 0}
+.vid{display:block;width:100%;max-width:100%;aspect-ratio:16/9;border:0;border-radius:8px;background:#000}
+.vlink{display:inline-block;margin-top:6px;font:14px var(--ui)}
 .nav{display:flex;gap:10px;margin:28px 0 12px}
 .nav a,.nav span{flex:1;text-align:center;padding:13px;border-radius:10px;font:inherit;font-family:var(--ui);text-decoration:none}
 .nav a{background:var(--acc);color:var(--accfg)}
@@ -253,6 +255,29 @@ function game(name){
   const cur=app.querySelector('.cur');if(cur)cur.scrollIntoView({block:'center'});
 }
 
+const ytId=h=>{const m=String(h).match(/(?:youtube(?:-nocookie)?\.com\/(?:v\/|embed\/|watch\?[^"'\s]*?v=|get_player\?[^"'\s]*?video_id=)|youtu\.be\/|ytimg\.com\/vi\/)([\w-]{11})/);return m&&m[1]};
+const httpsUrl=u=>u.replace(/^\/\//,'https://').replace(/^http:\/\//i,'https://');
+function fixMedia(root){
+  root.querySelectorAll('img').forEach(i=>{const s=i.getAttribute('src');if(s)i.setAttribute('src',httpsUrl(s))});
+  root.querySelectorAll('iframe,object,embed').forEach(el=>{
+    if(el.tagName==='EMBED'&&el.closest('object'))return;
+    const id=ytId(el.outerHTML);
+    if(id){
+      const w=document.createElement('div');w.className='vwrap';
+      const f=document.createElement('iframe');
+      f.src='https://www.youtube.com/embed/'+id;f.className='vid';
+      f.setAttribute('allowfullscreen','');
+      f.setAttribute('allow','fullscreen; picture-in-picture; encrypted-media');
+      f.setAttribute('referrerpolicy','strict-origin-when-cross-origin');
+      const a=document.createElement('a');
+      a.href='https://www.youtube.com/watch?v='+id;a.target='_blank';a.rel='noopener';a.className='vlink';a.textContent='▶ Auf YouTube öffnen';
+      w.append(f,a);el.replaceWith(w);
+    }else if(el.tagName==='IFRAME'){
+      const s=el.getAttribute('src');if(s)el.setAttribute('src',httpsUrl(s));
+      el.removeAttribute('width');el.removeAttribute('height');el.classList.add('vid');
+    }
+  });
+}
 async function post(name,idx){
   setHead(name,true);
   const g=games&&games.find(x=>x.n===name);
@@ -272,6 +297,7 @@ async function post(name,idx){
   const next=idx<g.l.length-1?`<a href="#/p/${enc(name)}/${idx+1}">Nächster ›</a>`:`<a href="#" id="fin">${done[name]?'✓ Fertig gelesen (rückgängig)':'Fertig gelesen ✓'}</a>`;
   app.innerHTML=`<article><h2>${esc(x.title)}</h2><div class="meta">${x.date} · Beitrag ${idx+1} von ${g.l.length}${x.url?` · <a href="${esc(x.url)}" target="_blank" rel="noopener">Original</a>`:''}</div>${x.html}</article><div class="nav">${prev}${next}</div>`;
   app.querySelectorAll('article a').forEach(a=>{a.target='_blank';a.rel='noopener'});
+  fixMedia(app.querySelector('article'));
   const fb=$('#fin');if(fb)fb.onclick=e=>{e.preventDefault();finish(name,idx)};
   window.scrollTo(0,resume);
 }
