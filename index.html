@@ -85,6 +85,8 @@ let pmap=store.get('pmap',null);        // Pfad -> [PostId,Titel,Datum]
 const cache={};
 function save(){store.set('progress2',progress);store.set('done2',done)}
 const keyOf=u=>u.replace(/^https?:\/\/[^\/]+/,'').split('#')[0].split('?')[0];
+// Aktueller Beitrag eines Spiels: über die gemerkte Beitrags-ID, damit Einfügungen im Verzeichnis nicht verschieben
+const curIdx=(g,p)=>{const i=p&&p.id?g.l.findIndex(l=>l[0]===p.id):-1;return i>=0?i:p&&p.idx};
 
 function jsonp(url,ms=15000){
   return new Promise((res,rej)=>{
@@ -153,6 +155,13 @@ async function setup(say,full){
   const g=parseLines(htmlToLines(e.content.$t));
   if(!g.length)throw new Error('Spielverzeichnis konnte nicht gelesen werden');
   games=g;store.set('games',games);
+  // Fortschritt umhängen, falls ein Spiel umbenannt wurde oder sich die „#2“-Nummerierung verschoben hat
+  for(const [n,p] of Object.entries(progress)){
+    if(!p.id||g.some(x=>x.n===n&&x.l.some(l=>l[0]===p.id)))continue;
+    const h=g.find(x=>x.l.some(l=>l[0]===p.id));
+    if(h&&!progress[h.n]){progress[h.n]=p;delete progress[n]}
+  }
+  save();
   pmap=full?{}:(pmap||{});
   const S=FEED+'/posts/summary';
   let i=1,total=0;
@@ -208,12 +217,13 @@ function visible(q){
 async function home(){
   setHead('CRPG Reader',false);
   if(!games||!pmap){
+    const my=nav;
     app.innerHTML='<div class="msg" id="sm">Einmalige Einrichtung …<br>Das dauert ein bis zwei Minuten.</div>';
-    try{await setup(t=>{const s=$('#sm');if(s)s.textContent=t},true)}
-    catch(e){app.innerHTML=`<div class="msg">Einrichtung fehlgeschlagen.<br><small>${esc(e.message)}</small><br><br><button id="retry">Nochmal versuchen</button></div>`;$('#retry').onclick=()=>route();return}
+    try{await setup(t=>{const s=$('#sm');if(s)s.textContent=t},true);if(my!==nav)return}
+    catch(e){if(my!==nav)return;app.innerHTML=`<div class="msg">Einrichtung fehlgeschlagen.<br><small>${esc(e.message)}</small><br><br><button id="retry">Nochmal versuchen</button></div>`;$('#retry').onclick=()=>route();return}
   }
-  const last=Object.entries(progress).sort((a,b)=>b[1].ts-a[1].ts)[0];
-  app.innerHTML=(last?`<a class="cont" href="#/p/${enc(last[0])}/${last[1].idx}"><small>Weiterlesen</small><b>${esc(last[0])}</b><span>${esc(last[1].title)}</span></a>`:'')
+  const last=Object.entries(progress).sort((a,b)=>b[1].ts-a[1].ts)[0],lg=last&&games.find(x=>x.n===last[0]);
+  app.innerHTML=(lg?`<a class="cont" href="#/p/${enc(last[0])}/${curIdx(lg,last[1])}"><small>Weiterlesen</small><b>${esc(last[0])}</b><span>${esc(last[1].title)}</span></a>`:'')
     +'<input id="q" type="search" placeholder="Spiel suchen" autocomplete="off"><div id="vinfo" class="meta"></div><div id="list"></div>';
   const draw=()=>{
     if(!$('#list'))return;
@@ -224,7 +234,7 @@ async function home(){
     $('#vinfo').textContent=bits.length?`${f.length} Spiele · ${bits.join(' · ')}`:'';
     $('#list').innerHTML=f.length?f.map(g=>{
       const p=progress[g.n],d=done[g.n];
-      return `<a class="row${d?' done':''}" href="#/g/${enc(g.n)}"><span>${esc(g.n)}</span>${d?'<i>✓ fertig</i>':p?`<i>Beitrag ${p.idx+1}/${g.l.length}</i>`:''}</a>`;
+      return `<a class="row${d?' done':''}" href="#/g/${enc(g.n)}"><span>${esc(g.n)}</span>${d?'<i>✓ fertig</i>':p?`<i>Beitrag ${curIdx(g,p)+1}/${g.l.length}</i>`:''}</a>`;
     }).join(''):'<div class="msg">Keine Spiele in dieser Ansicht.</div>';
   };
   redraw=draw;
@@ -235,9 +245,9 @@ function game(name){
   setHead(name,true);
   const g=games&&games.find(x=>x.n===name);
   if(!g){location.hash='#/';return}
-  const p=progress[name]||{};
+  const p=progress[name]||{},ci=curIdx(g,p);
   const rows=g.l.map(([k,t],i)=>{
-    const m=pmap&&pmap[k],cls=i===p.idx?'row cur':(p.read&&p.read[k]?'row done':'row');
+    const m=pmap&&pmap[k],cls=i===ci?'row cur':(p.read&&p.read[k]?'row done':'row');
     return `<a class="${cls}" href="#/p/${enc(name)}/${i}"><span>${esc(m?m[1]:t)}</span><i>${esc(t)}</i></a>`;
   }).join('');
   app.innerHTML=`<div class="fin"><label><input type="checkbox" id="fin"${done[name]?' checked':''}> Fertig gelesen</label><button id="rst"${progress[name]?'':' disabled'}>Fortschritt zurücksetzen</button></div>`+rows;
@@ -285,12 +295,13 @@ async function post(name,idx){
   const lk=g.l[idx];
   if(!lk){location.hash='#/g/'+enc(name);return}
   app.innerHTML='<div class="msg">Lade Beitrag …</div>';
-  let x;
+  const my=nav;let x;
   try{x=await loadPost(lk[0])}
-  catch(e){app.innerHTML=`<div class="msg">Beitrag konnte nicht geladen werden.<br><small>${esc(e.message)}</small></div>`;return}
+  catch(e){if(my!==nav)return;app.innerHTML=`<div class="msg">Beitrag konnte nicht geladen werden.<br><small>${esc(e.message)}</small></div>`;return}
+  if(my!==nav)return;
   const old=progress[name]||{read:{}};
-  const resume=old.idx===idx?old.scroll||0:0;
-  if(old.idx!==undefined&&old.idx!==idx&&old.id)old.read[old.id]=1;
+  const resume=old.id===lk[0]?old.scroll||0:0;
+  if(old.id&&old.id!==lk[0])old.read[old.id]=1;
   progress[name]={idx,id:lk[0],title:x.title,scroll:resume,ts:Date.now(),total:g.l.length,read:old.read||{}};
   save();
   const prev=idx>0?`<a href="#/p/${enc(name)}/${idx-1}">‹ Vorheriger</a>`:'<span>‹ Vorheriger</span>';
@@ -299,7 +310,23 @@ async function post(name,idx){
   app.querySelectorAll('article a').forEach(a=>{a.target='_blank';a.rel='noopener'});
   fixMedia(app.querySelector('article'));
   const fb=$('#fin');if(fb)fb.onclick=e=>{e.preventDefault();finish(name,idx)};
-  window.scrollTo(0,resume);
+  restoreScroll(resume);
+}
+
+// Bilder laden nach dem Einfügen nach und verlängern die Seite. Deshalb so lange
+// erneut zur gemerkten Stelle scrollen, bis alles geladen ist oder der Nutzer selbst scrollt.
+let restoring=null;
+function stopRestore(){if(restoring)restoring()}
+function restoreScroll(y){
+  stopRestore();
+  window.scrollTo(0,y);
+  if(!y)return;
+  const imgs=[...app.querySelectorAll('article img')];
+  const go=()=>{window.scrollTo(0,y);if(Math.abs(scrollY-y)<2&&imgs.every(i=>i.complete))stopRestore()};
+  const ro=new ResizeObserver(go),t=setTimeout(stopRestore,15000),evs=['wheel','touchstart','keydown','mousedown'];
+  restoring=()=>{clearTimeout(t);ro.disconnect();evs.forEach(ev=>removeEventListener(ev,stopRestore));restoring=null};
+  evs.forEach(ev=>addEventListener(ev,stopRestore,{passive:true}));
+  ro.observe(app);go();
 }
 
 let sv;
@@ -307,8 +334,9 @@ addEventListener('scroll',()=>{
   const m=location.hash.split('/');if(m[1]!=='p')return;
   clearTimeout(sv);
   sv=setTimeout(()=>{
-    const name=decodeURIComponent(m[2]||''),p=progress[name];
-    if(!p||p.idx!==+m[3])return;
+    if(restoring)return;
+    const name=decodeURIComponent(m[2]||''),p=progress[name],g=games&&games.find(x=>x.n===name);
+    if(!p||!g||(g.l[+m[3]]||[])[0]!==p.id)return;
     p.scroll=Math.round(scrollY);p.ts=Date.now();
     if(scrollY+innerHeight>=document.documentElement.scrollHeight-200)p.read[p.id]=1;
     save();
@@ -320,7 +348,9 @@ function finish(name,idx){
   if(!confirm('Als fertig gelesen markieren? Dein Lesefortschritt für dieses Spiel wird gelöscht.'))return;
   done[name]=Date.now();delete progress[name];save();location.hash='#/';
 }
+let nav=0; // steigt bei jedem Seitenwechsel; verspätete Ladevorgänge erkennen daran, dass sie veraltet sind
 function route(){
+  nav++;stopRestore();
   const [,t,a,b]=location.hash.slice(1).split('/').map(s=>s&&decodeURIComponent(s));
   if(t==='g'&&a)game(a);else if(t==='p'&&a)post(a,+b||0);else home();
   if(t!=='p')window.scrollTo(0,0);
